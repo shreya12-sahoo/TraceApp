@@ -520,13 +520,21 @@
       </div>
       <div style="margin-top: 22px;">
         <div class="section-title" style="margin-bottom: 4px;">Cloud Sync</div>
-        <div class="section-sub" style="margin-bottom: 10px;">Link your phone and laptop so tasks made on one show up on the other. Uses a free third-party storage service (kvdb.io) — not run by Anthropic, so treat your sync code like a password and don't share it.</div>
+        <div class="section-sub" style="margin-bottom: 10px;">Link your phone and laptop so tasks made on one show up on the other. Two free hobby services didn't hold up reliably, so this now uses Google's Firebase — a well-established free service, not run by Anthropic. One-time setup (~5 min), see the setup guide.</div>
         <div class="card" id="sync-card">
-          <div id="sync-off-view">
-            <div class="modal-text" style="margin-bottom: 10px;">Not linked yet. Start a new sync on this device, or join one already started on another device.</div>
+          <div id="sync-db-view">
+            <div class="modal-text" style="margin-bottom: 8px;">First, paste your Firebase Database URL (see the setup guide for how to get one — it's free):</div>
+            <input id="sync-db-input" type="text" placeholder="https://your-project-default-rtdb.firebaseio.com" style="width:100%; padding:8px; border-radius:6px; border:1px solid var(--border); background:var(--bg-input); color:var(--text-primary); margin-bottom:8px;" />
+            <div class="modal-actions" style="justify-content: flex-start;">
+              <button class="btn btn-primary" onclick="saveSyncDb()">Save</button>
+            </div>
+          </div>
+          <div id="sync-off-view" style="display:none;">
+            <div class="modal-text" style="margin-bottom: 10px;">Database linked. Now start a new sync on this device, or join one already started on another device.</div>
             <div class="modal-actions" style="justify-content: flex-start;">
               <button class="btn btn-primary" onclick="startNewSync()">Start new sync</button>
               <button class="btn btn-ghost" onclick="showJoinSync()">Join with code</button>
+              <button class="btn btn-ghost" onclick="showSyncDbView()">Change database URL</button>
             </div>
             <div id="join-sync-row" style="display:none; margin-top: 10px;">
               <input id="join-sync-input" type="text" placeholder="Paste sync code here" style="width:100%; padding:8px; border-radius:6px; border:1px solid var(--border); background:var(--bg-input); color:var(--text-primary); margin-bottom:8px;" />
@@ -534,7 +542,7 @@
             </div>
           </div>
           <div id="sync-on-view" style="display:none;">
-            <div class="modal-text" style="margin-bottom: 8px;">Linked. Enter this same code on your other device:</div>
+            <div class="modal-text" style="margin-bottom: 8px;">Linked. Enter this same code (and the same database URL) on your other device:</div>
             <textarea id="sync-code-area" class="backup-area" readonly style="min-height:44px;"></textarea>
             <div class="modal-actions" style="justify-content: flex-start; margin-top: 8px;">
               <button class="btn btn-primary" onclick="copySyncCode()">Copy code</button>
@@ -829,10 +837,9 @@
       scheduleSyncPush();
     }
 
-    /* ---------- CLOUD SYNC (kvdb.io — free, keyless key-value storage) ---------- */
+    /* ---------- CLOUD SYNC (Firebase Realtime Database — free, requires a one-time project setup) ---------- */
     const SYNC_ID_KEY = "trace-sync-id";
-    const KVDB_BASE = "https://kvdb.io";
-    const SYNC_VALUE_KEY = "state";
+    const SYNC_DB_KEY = "trace-sync-dburl";
     let syncPushTimer = null;
 
     function getSyncId() {
@@ -841,16 +848,35 @@
     function setSyncId(id) {
       try { id ? localStorage.setItem(SYNC_ID_KEY, id) : localStorage.removeItem(SYNC_ID_KEY); } catch (e) {}
     }
+    function getSyncDb() {
+      try { return localStorage.getItem(SYNC_DB_KEY); } catch (e) { return null; }
+    }
+    function setSyncDb(url) {
+      try { url ? localStorage.setItem(SYNC_DB_KEY, url) : localStorage.removeItem(SYNC_DB_KEY); } catch (e) {}
+    }
+    function syncPath(id) {
+      const base = getSyncDb().replace(/\/$/, "");
+      return base + "/trace-sync/" + id + ".json";
+    }
     function setSyncStatus(msg) {
       const el = document.getElementById("sync-status");
       if (el) el.textContent = msg;
     }
 
     function updateSyncUI() {
+      const dbView = document.getElementById("sync-db-view");
       const offView = document.getElementById("sync-off-view");
       const onView = document.getElementById("sync-on-view");
-      if (!offView || !onView) return;
+      if (!dbView || !offView || !onView) return;
+      const db = getSyncDb();
       const id = getSyncId();
+      if (!db) {
+        dbView.style.display = "block";
+        offView.style.display = "none";
+        onView.style.display = "none";
+        return;
+      }
+      dbView.style.display = "none";
       if (id) {
         offView.style.display = "none";
         onView.style.display = "block";
@@ -864,35 +890,63 @@
       }
     }
 
+    function saveSyncDb() {
+      let val = document.getElementById("sync-db-input").value.trim();
+      if (!val) { showToast("Paste your Firebase Database URL first"); return; }
+      if (!/^https:\/\//.test(val)) { showToast("That doesn't look like a URL — it should start with https://"); return; }
+      setSyncDb(val);
+      updateSyncUI();
+      showToast("Database saved on this device");
+    }
+
+    function showSyncDbView() {
+      document.getElementById("sync-db-view").style.display = "block";
+      document.getElementById("sync-off-view").style.display = "none";
+      document.getElementById("sync-on-view").style.display = "none";
+      const input = document.getElementById("sync-db-input");
+      if (input) input.value = getSyncDb() || "";
+    }
+
     function showJoinSync() {
       document.getElementById("join-sync-row").style.display = "block";
     }
 
+    function randomSyncCode() {
+      const chars = "abcdefghijkmnpqrstuvwxyz23456789";
+      let out = "";
+      for (let i = 0; i < 8; i++) out += chars[Math.floor(Math.random() * chars.length)];
+      return out;
+    }
+
     async function startNewSync() {
+      if (!getSyncDb()) { showToast("Save your database URL first"); return; }
       if (location.protocol === "file:") {
         setSyncStatus("Cloud Sync can't reach the internet from a file opened straight off your computer (a file:// address). Host it online first — see the setup guide — then try again.");
         showToast("Sync setup failed", "error");
         return;
       }
+      const id = randomSyncCode();
       try {
         setSyncStatus("Setting up...");
-        const res = await fetch(KVDB_BASE + "/", { method: "POST" });
+        const res = await fetch(syncPath(id), {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(state),
+        });
         if (!res.ok) throw new Error("server returned " + res.status);
-        const id = (await res.text()).trim();
-        if (!id) throw new Error("no code returned");
         setSyncId(id);
         updateSyncUI();
         setSyncStatus("Linked just now.");
         showToast("Sync started — copy the code to your other device");
-        await pushSyncNow();
       } catch (e) {
         const detail = (e && e.message) ? e.message : String(e);
-        setSyncStatus("Couldn't start sync (" + detail + "). This usually means the sync service is unreachable from here — check your connection, or that this page is hosted online rather than opened as a local file.");
+        setSyncStatus("Couldn't start sync (" + detail + "). Double check your database URL is correct and that your Firebase rules allow read/write.");
         showToast("Sync setup failed", "error");
       }
     }
 
     async function joinSync() {
+      if (!getSyncDb()) { showToast("Save your database URL first"); return; }
       const id = document.getElementById("join-sync-input").value.trim();
       if (!id) return;
       setSyncId(id);
@@ -903,19 +957,18 @@
 
     async function pullSync(forceAdopt) {
       const id = getSyncId();
-      if (!id) return;
+      if (!id || !getSyncDb()) return;
       try {
         setSyncStatus("Syncing...");
-        const res = await fetch(KVDB_BASE + "/" + id + "/" + SYNC_VALUE_KEY);
-        if (res.status === 404) {
+        const res = await fetch(syncPath(id));
+        if (!res.ok) throw new Error("server returned " + res.status);
+        const remote = await res.json();
+        if (!remote) {
           await pushSyncNow();
           setSyncStatus("Nothing there yet — pushed this device's data.");
           return;
         }
-        if (!res.ok) throw new Error("pull failed: " + res.status);
-        const text = await res.text();
-        const remote = JSON.parse(text);
-        const remoteUpdated = (remote && remote.updatedAt) || 0;
+        const remoteUpdated = remote.updatedAt || 0;
         const localUpdated = state.updatedAt || 0;
         if (forceAdopt || remoteUpdated > localUpdated) {
           state = migrateState(remote) || state;
@@ -938,9 +991,9 @@
 
     async function pushSyncNow() {
       const id = getSyncId();
-      if (!id) return;
+      if (!id || !getSyncDb()) return;
       try {
-        await fetch(KVDB_BASE + "/" + id + "/" + SYNC_VALUE_KEY, {
+        await fetch(syncPath(id), {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(state),
@@ -949,7 +1002,7 @@
     }
 
     function scheduleSyncPush() {
-      if (!getSyncId()) return;
+      if (!getSyncId() || !getSyncDb()) return;
       clearTimeout(syncPushTimer);
       syncPushTimer = setTimeout(() => { pushSyncNow(); }, 1500);
     }
