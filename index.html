@@ -520,7 +520,7 @@
       </div>
       <div style="margin-top: 22px;">
         <div class="section-title" style="margin-bottom: 4px;">Cloud Sync</div>
-        <div class="section-sub" style="margin-bottom: 10px;">Link your phone and laptop so tasks made on one show up on the other. Uses a free third-party storage service (jsonblob.com) — not run by Anthropic, so treat your sync code like a password and don't share it.</div>
+        <div class="section-sub" style="margin-bottom: 10px;">Link your phone and laptop so tasks made on one show up on the other. Uses a free third-party storage service (kvdb.io) — not run by Anthropic, so treat your sync code like a password and don't share it.</div>
         <div class="card" id="sync-card">
           <div id="sync-off-view">
             <div class="modal-text" style="margin-bottom: 10px;">Not linked yet. Start a new sync on this device, or join one already started on another device.</div>
@@ -541,8 +541,8 @@
               <button class="btn btn-ghost" onclick="manualSync()">Sync now</button>
               <button class="btn btn-danger" onclick="disconnectSync()">Disconnect</button>
             </div>
-            <div class="meta" id="sync-status" style="margin-top: 8px;"></div>
           </div>
+          <div class="meta" id="sync-status" style="margin-top: 10px;"></div>
         </div>
       </div>
       <div style="margin-top: 22px;">
@@ -829,9 +829,10 @@
       scheduleSyncPush();
     }
 
-    /* ---------- CLOUD SYNC (jsonblob.com — free, keyless, third-party) ---------- */
+    /* ---------- CLOUD SYNC (kvdb.io — free, keyless key-value storage) ---------- */
     const SYNC_ID_KEY = "trace-sync-id";
-    const JSONBLOB_BASE = "https://jsonblob.com/api/jsonBlob";
+    const KVDB_BASE = "https://kvdb.io";
+    const SYNC_VALUE_KEY = "state";
     let syncPushTimer = null;
 
     function getSyncId() {
@@ -844,11 +845,12 @@
       const el = document.getElementById("sync-status");
       if (el) el.textContent = msg;
     }
+
     function updateSyncUI() {
-      const id = getSyncId();
       const offView = document.getElementById("sync-off-view");
       const onView = document.getElementById("sync-on-view");
       if (!offView || !onView) return;
+      const id = getSyncId();
       if (id) {
         offView.style.display = "none";
         onView.style.display = "block";
@@ -857,32 +859,37 @@
         offView.style.display = "block";
         onView.style.display = "none";
       }
-    }
-
-    async function startNewSync() {
-      try {
-        setSyncStatus("Setting up...");
-        const res = await fetch(JSONBLOB_BASE, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "Accept": "application/json" },
-          body: JSON.stringify(state),
-        });
-        if (!res.ok) throw new Error("create failed");
-        const loc = res.headers.get("Location") || "";
-        const id = loc.split("/").pop();
-        if (!id) throw new Error("no id returned");
-        setSyncId(id);
-        updateSyncUI();
-        setSyncStatus("Linked just now.");
-        showToast("Sync started — copy the code to your other device");
-      } catch (e) {
-        setSyncStatus("Couldn't start sync. Check your connection and try again.");
-        showToast("Sync setup failed", "error");
+      if (location.protocol === "file:") {
+        setSyncStatus("Heads up: this page is open as a local file, so Cloud Sync can't reach the internet from here. Host it online (see the setup guide) for sync to work.");
       }
     }
 
     function showJoinSync() {
       document.getElementById("join-sync-row").style.display = "block";
+    }
+
+    async function startNewSync() {
+      if (location.protocol === "file:") {
+        setSyncStatus("Cloud Sync can't reach the internet from a file opened straight off your computer (a file:// address). Host it online first — see the setup guide — then try again.");
+        showToast("Sync setup failed", "error");
+        return;
+      }
+      try {
+        setSyncStatus("Setting up...");
+        const res = await fetch(KVDB_BASE + "/", { method: "POST" });
+        if (!res.ok) throw new Error("server returned " + res.status);
+        const id = (await res.text()).trim();
+        if (!id) throw new Error("no code returned");
+        setSyncId(id);
+        updateSyncUI();
+        setSyncStatus("Linked just now.");
+        showToast("Sync started — copy the code to your other device");
+        await pushSyncNow();
+      } catch (e) {
+        const detail = (e && e.message) ? e.message : String(e);
+        setSyncStatus("Couldn't start sync (" + detail + "). This usually means the sync service is unreachable from here — check your connection, or that this page is hosted online rather than opened as a local file.");
+        showToast("Sync setup failed", "error");
+      }
     }
 
     async function joinSync() {
@@ -899,10 +906,16 @@
       if (!id) return;
       try {
         setSyncStatus("Syncing...");
-        const res = await fetch(JSONBLOB_BASE + "/" + id, { headers: { Accept: "application/json" } });
-        if (!res.ok) throw new Error("pull failed");
-        const remote = await res.json();
-        const remoteUpdated = remote && remote.updatedAt ? remote.updatedAt : 0;
+        const res = await fetch(KVDB_BASE + "/" + id + "/" + SYNC_VALUE_KEY);
+        if (res.status === 404) {
+          await pushSyncNow();
+          setSyncStatus("Nothing there yet — pushed this device's data.");
+          return;
+        }
+        if (!res.ok) throw new Error("pull failed: " + res.status);
+        const text = await res.text();
+        const remote = JSON.parse(text);
+        const remoteUpdated = (remote && remote.updatedAt) || 0;
         const localUpdated = state.updatedAt || 0;
         if (forceAdopt || remoteUpdated > localUpdated) {
           state = migrateState(remote) || state;
@@ -918,7 +931,8 @@
           setSyncStatus("Already up to date.");
         }
       } catch (e) {
-        setSyncStatus("Couldn't reach sync — will try again next time.");
+        const detail = (e && e.message) ? e.message : String(e);
+        setSyncStatus("Couldn't reach sync (" + detail + "). Will try again next time.");
       }
     }
 
@@ -926,9 +940,9 @@
       const id = getSyncId();
       if (!id) return;
       try {
-        await fetch(JSONBLOB_BASE + "/" + id, {
+        await fetch(KVDB_BASE + "/" + id + "/" + SYNC_VALUE_KEY, {
           method: "PUT",
-          headers: { "Content-Type": "application/json", "Accept": "application/json" },
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify(state),
         });
       } catch (e) { /* silent — retried on next save or manual sync */ }
