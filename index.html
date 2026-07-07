@@ -558,7 +558,7 @@
       </div>
       <div style="margin-top: 22px;">
         <div class="section-title" style="margin-bottom: 4px;">Cloud Sync</div>
-        <div class="section-sub" style="margin-bottom: 10px;">Link your phone and laptop so tasks made on one show up on the other. Two free hobby services didn't hold up reliably, so this now uses Google's Firebase — a well-established free service, not run by Anthropic. One-time setup (~5 min), see the setup guide.</div>
+        <div class="section-sub" style="margin-bottom: 10px;">Link your phone and laptop so tasks made on one show up on the other, checked automatically every ~20 seconds while the app is open. Two free hobby services didn't hold up reliably, so this now uses Google's Firebase — a well-established free service, not run by Anthropic. One-time setup (~5 min), see the setup guide.</div>
         <div class="card" id="sync-card">
           <div id="sync-db-view">
             <div class="modal-text" style="margin-bottom: 8px;">First, paste your Firebase Database URL (see the setup guide for how to get one — it's free):</div>
@@ -592,9 +592,14 @@
         </div>
       </div>
       <div style="margin-top: 22px;">
-        <div class="section-title" style="margin-bottom: 10px;">Backup & Restore</div>
+        <div class="section-title" style="margin-bottom: 4px;">Backup & Restore</div>
+        <div class="section-sub" style="margin-bottom: 10px;">Automatic backups save a daily snapshot to the same Firebase database used for Cloud Sync above — set that up first and backups run on their own, no manual steps.</div>
         <div class="card" style="margin-bottom: 10px;">
-          <div class="modal-text" style="margin-bottom: 8px;">Copy this JSON to back up your data:</div>
+          <div class="modal-text" id="auto-backup-hint" style="margin-bottom: 8px; display:none;">Set up Cloud Sync above first — automatic backups reuse that same database.</div>
+          <div id="auto-backup-list"></div>
+        </div>
+        <div class="card" style="margin-bottom: 10px;">
+          <div class="modal-text" style="margin-bottom: 8px;">Copy this JSON to back up your data manually:</div>
           <textarea id="backup-area" class="backup-area" readonly></textarea>
           <div class="modal-actions" style="justify-content: flex-start; margin-top: 8px;">
             <button class="btn btn-primary" onclick="copyBackup()">Copy</button>
@@ -873,7 +878,7 @@
       maybeShowDailyRundown();
       maybeNotifyUpcomingTasks();
       updateSyncUI();
-      if (getSyncId()) pullSync(false);
+      if (getSyncId()) { pullSync(false); startSyncPolling(); }
     }
 
     async function saveState() {
@@ -945,6 +950,7 @@
       if (!/^https:\/\//.test(val)) { showToast("That doesn't look like a URL — it should start with https://"); return; }
       setSyncDb(val);
       updateSyncUI();
+      renderBackupList();
       showToast("Database saved on this device");
     }
 
@@ -980,13 +986,14 @@
         const res = await fetch(syncPath(id), {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(JSON.stringify(state)),
+          body: JSON.stringify(state),
         });
         if (!res.ok) throw new Error("server returned " + res.status);
         setSyncId(id);
         updateSyncUI();
         setSyncStatus("Linked just now.");
         showToast("Sync started — copy the code to your other device");
+        startSyncPolling();
       } catch (e) {
         const detail = (e && e.message) ? e.message : String(e);
         setSyncStatus("Couldn't start sync (" + detail + "). Double check your database URL is correct and that your Firebase rules allow read/write.");
@@ -1002,6 +1009,7 @@
       updateSyncUI();
       showToast("Connecting...");
       await pullSync(true);
+      startSyncPolling();
     }
 
     async function pullSync(forceAdopt) {
@@ -1050,22 +1058,175 @@
     }
 
     async function pushSyncNow() {
+      const db = getSyncDb();
+      if (!db) return;
       const id = getSyncId();
-      if (!id || !getSyncDb()) return;
-      try {
-        await fetch(syncPath(id), {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(JSON.stringify(state)),
-        });
-      } catch (e) { /* silent — retried on next save or manual sync */ }
+      if (id) {
+        try {
+          await fetch(syncPath(id), {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(state),
+          });
+        } catch (e) { /* silent — retried on next save or manual sync */ }
+      }
+      writeBackupSnapshot();
     }
 
     function scheduleSyncPush() {
-      if (!getSyncId() || !getSyncDb()) return;
+      if (!getSyncDb()) return;
       clearTimeout(syncPushTimer);
       syncPushTimer = setTimeout(() => { pushSyncNow(); }, 1500);
     }
+
+    /* ---------- AUTOMATIC DATED BACKUPS (separate Firebase path, reuses same DB URL) ---------- */
+    const BACKUP_ID_KEY = "trace-backup-id";
+    const BACKUP_LAST_PRUNE_KEY = "trace-backup-last-prune";
+    const BACKUP_RETENTION_DAYS = 14;
+
+    function getBackupId() {
+      const syncId = getSyncId();
+      if (syncId) return syncId;
+      try {
+        let id = localStorage.getItem(BACKUP_ID_KEY);
+        if (!id) {
+          id = randomSyncCode();
+          localStorage.setItem(BACKUP_ID_KEY, id);
+        }
+        return id;
+      } catch (e) { return null; }
+    }
+
+    function backupBasePath() {
+      const db = getSyncDb();
+      if (!db) return null;
+      const id = getBackupId();
+      if (!id) return null;
+      return db.replace(/\/$/, "") + "/trace-backup/" + id;
+    }
+
+    async function writeBackupSnapshot() {
+      const base = backupBasePath();
+      if (!base) return;
+      try {
+        await fetch(base + "/" + todayStr() + ".json", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(state),
+        });
+        maybePruneOldBackups();
+      } catch (e) { /* silent — retried on next save */ }
+    }
+
+    function maybePruneOldBackups() {
+      let lastPrune = null;
+      try { lastPrune = localStorage.getItem(BACKUP_LAST_PRUNE_KEY); } catch (e) {}
+      const today = todayStr();
+      if (lastPrune === today) return;
+      try { localStorage.setItem(BACKUP_LAST_PRUNE_KEY, today); } catch (e) {}
+      pruneOldBackups();
+    }
+
+    async function pruneOldBackups() {
+      const base = backupBasePath();
+      if (!base) return;
+      try {
+        const res = await fetch(base + ".json?shallow=true");
+        if (!res.ok) return;
+        const keys = await res.json();
+        if (!keys || typeof keys !== "object") return;
+        const cutoff = Date.now() - BACKUP_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+        const deletions = Object.keys(keys)
+          .filter((dateKey) => {
+            const t = Date.parse(dateKey + "T00:00:00");
+            return !isNaN(t) && t < cutoff;
+          })
+          .map((dateKey) => fetch(base + "/" + dateKey + ".json", { method: "DELETE" }).catch(() => {}));
+        await Promise.all(deletions);
+      } catch (e) { /* silent — pruning is best-effort */ }
+    }
+
+    async function listBackups() {
+      const base = backupBasePath();
+      if (!base) return [];
+      try {
+        const res = await fetch(base + ".json?shallow=true");
+        if (!res.ok) return [];
+        const keys = await res.json();
+        if (!keys || typeof keys !== "object") return [];
+        return Object.keys(keys).sort().reverse();
+      } catch (e) { return []; }
+    }
+
+    function backupDateLabel(dateKey) {
+      if (dateKey === todayStr()) return "Today";
+      const y = new Date(Date.now() - 86400000);
+      const yStr = y.getFullYear() + "-" + String(y.getMonth() + 1).padStart(2, "0") + "-" + String(y.getDate()).padStart(2, "0");
+      if (dateKey === yStr) return "Yesterday";
+      return dateKey;
+    }
+
+    async function renderBackupList() {
+      const hint = document.getElementById("auto-backup-hint");
+      const listEl = document.getElementById("auto-backup-list");
+      if (!hint || !listEl) return;
+      if (!getSyncDb()) {
+        hint.style.display = "block";
+        listEl.innerHTML = "";
+        return;
+      }
+      hint.style.display = "none";
+      const dates = await listBackups();
+      if (!dates.length) {
+        listEl.innerHTML = '<div class="meta">No backups yet — one is saved automatically a couple seconds after you make changes.</div>';
+        return;
+      }
+      listEl.innerHTML = dates.map((d) =>
+        '<div class="modal-actions" style="justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);">'
+        + '<span class="modal-text">' + backupDateLabel(d) + '</span>'
+        + '<button class="btn btn-ghost" onclick="restoreFromBackup(\'' + d + '\')">Restore</button>'
+        + '</div>'
+      ).join("");
+    }
+
+    async function restoreFromBackup(dateKey) {
+      const base = backupBasePath();
+      if (!base) return;
+      if (!confirm("Replace your current data with the backup from " + backupDateLabel(dateKey) + "? This can't be undone.")) return;
+      try {
+        const res = await fetch(base + "/" + dateKey + ".json");
+        if (!res.ok) throw new Error("server returned " + res.status);
+        const remote = await res.json();
+        if (!remote || typeof remote !== "object") throw new Error("backup was empty or unreadable");
+        const migrated = migrateState(remote);
+        if (!migrated) throw new Error("backup data was in an unexpected shape");
+        state = migrated;
+        await saveState();
+        applyTheme(state.theme);
+        applyCustomColors();
+        render();
+        showToast("Restored backup from " + backupDateLabel(dateKey), "success");
+      } catch (e) {
+        const detail = (e && e.message) ? e.message : String(e);
+        showToast("Couldn't restore that backup (" + detail + ")", "error");
+      }
+    }
+
+    let syncPollTimer = null;
+    function startSyncPolling() {
+      stopSyncPolling();
+      if (!getSyncId() || !getSyncDb()) return;
+      syncPollTimer = setInterval(() => {
+        if (!document.hidden) pullSync(false);
+      }, 20000);
+    }
+    function stopSyncPolling() {
+      if (syncPollTimer) clearInterval(syncPollTimer);
+      syncPollTimer = null;
+    }
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden && getSyncId() && getSyncDb()) pullSync(false);
+    });
 
     function manualSync() { pullSync(false); }
 
@@ -1078,6 +1239,7 @@
 
     function disconnectSync() {
       setSyncId(null);
+      stopSyncPolling();
       updateSyncUI();
       showToast("Sync disconnected on this device");
     }
@@ -1901,7 +2063,7 @@
       document.getElementById("view-" + name).classList.add("active");
       document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
       document.querySelector('.tab[data-view="' + name + '"]').classList.add("active");
-      if (name === "stats") { renderStats(); updateSyncUI(); }
+      if (name === "stats") { renderStats(); updateSyncUI(); renderBackupList(); }
     }
 
     function render() {
@@ -2059,6 +2221,7 @@
     function restoreBackup() {
       const raw = document.getElementById("restore-area").value.trim();
       if (!raw) return;
+      if (!confirm("Replace your current data with this pasted backup? This can't be undone.")) return;
       try {
         const parsed = JSON.parse(raw);
         if (!parsed.tasks || !Array.isArray(parsed.tasks)) throw new Error("invalid backup");
