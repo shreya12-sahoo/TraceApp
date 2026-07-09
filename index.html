@@ -511,6 +511,7 @@
       <div class="upcoming-form">
         <input id="upcoming-text" type="text" placeholder="Task name" onkeydown="if(event.key==='Enter') addUpcomingTask()" />
         <input id="upcoming-date" type="date" />
+        <input id="upcoming-time" type="time" title="Reminder time (optional)" />
         <button class="btn btn-primary" onclick="addUpcomingTask()">Add</button>
       </div>
       <div id="upcoming-list" class="upcoming-list"></div>
@@ -589,6 +590,29 @@
             </div>
           </div>
           <div class="meta" id="sync-status" style="margin-top: 10px;"></div>
+        </div>
+      </div>
+      <div style="margin-top: 22px;">
+        <div class="section-title" style="margin-bottom: 4px;">Task Reminders</div>
+        <div class="section-sub" style="margin-bottom: 10px;">Get a real notification at the time you set on an Upcoming task, even if Trace is closed. One-time setup in the Firebase console (separate from the Database URL above) — see the setup guide.</div>
+        <div class="card" id="reminders-card">
+          <div id="reminders-config-view">
+            <div class="modal-text" style="margin-bottom: 8px;">Paste your Firebase Web app config (Console → Project Settings → General → Your apps):</div>
+            <textarea id="reminders-config-input" class="backup-area" placeholder='{"apiKey":"...","projectId":"...","messagingSenderId":"...","appId":"..."}' style="min-height:70px;"></textarea>
+            <div class="modal-text" style="margin: 8px 0;">Paste your VAPID key (Console → Cloud Messaging → Web Push certificates):</div>
+            <input id="reminders-vapid-input" type="text" placeholder="BN...your VAPID public key" style="width:100%; padding:8px; border-radius:6px; border:1px solid var(--border); background:var(--bg-input); color:var(--text-primary); margin-bottom:8px;" />
+            <div class="modal-actions" style="justify-content: flex-start;">
+              <button class="btn btn-primary" onclick="saveRemindersConfig()">Save</button>
+            </div>
+          </div>
+          <div id="reminders-enable-view" style="display:none;">
+            <div class="modal-text" id="reminders-status-text" style="margin-bottom: 10px;"></div>
+            <div class="modal-actions" style="justify-content: flex-start;">
+              <button class="btn btn-primary" id="reminders-enable-btn" onclick="enableReminders()">Enable reminders on this device</button>
+              <button class="btn btn-ghost" onclick="showRemindersConfigView()">Change config</button>
+            </div>
+          </div>
+          <div class="meta" id="reminders-status" style="margin-top: 10px;"></div>
         </div>
       </div>
       <div style="margin-top: 22px;">
@@ -704,6 +728,10 @@
 
   <!-- Confetti Container -->
   <div class="confetti-container" id="confetti-container"></div>
+
+  <!-- Firebase Messaging (compat build — no bundler needed), only used if Task Reminders is set up -->
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-messaging-compat.js"></script>
 
   <script>
     /* ==============================
@@ -878,6 +906,7 @@
       maybeShowDailyRundown();
       maybeNotifyUpcomingTasks();
       updateSyncUI();
+      updateRemindersUI();
       if (getSyncId()) { pullSync(false); startSyncPolling(); }
     }
 
@@ -1212,6 +1241,117 @@
       }
     }
 
+    /* ---------- TASK REMINDERS (Firebase Cloud Messaging) ---------- */
+    const FCM_CONFIG_KEY = "trace-fcm-config";
+    const FCM_VAPID_KEY = "trace-fcm-vapid";
+
+    function getFcmConfig() {
+      try { const raw = localStorage.getItem(FCM_CONFIG_KEY); return raw ? JSON.parse(raw) : null; } catch (e) { return null; }
+    }
+    function getFcmVapid() {
+      try { return localStorage.getItem(FCM_VAPID_KEY); } catch (e) { return null; }
+    }
+    function getReminderToken() {
+      try { return localStorage.getItem("trace-fcm-token"); } catch (e) { return null; }
+    }
+    function setReminderToken(token) {
+      try { token ? localStorage.setItem("trace-fcm-token", token) : localStorage.removeItem("trace-fcm-token"); } catch (e) {}
+    }
+
+    function updateRemindersUI() {
+      const configView = document.getElementById("reminders-config-view");
+      const enableView = document.getElementById("reminders-enable-view");
+      if (!configView || !enableView) return;
+      const config = getFcmConfig();
+      const vapid = getFcmVapid();
+      if (!config || !vapid) {
+        configView.style.display = "block";
+        enableView.style.display = "none";
+        return;
+      }
+      configView.style.display = "none";
+      enableView.style.display = "block";
+      const statusEl = document.getElementById("reminders-status-text");
+      const btn = document.getElementById("reminders-enable-btn");
+      if (getReminderToken() && "Notification" in window && Notification.permission === "granted") {
+        statusEl.textContent = "Reminders are on for this device.";
+        btn.textContent = "Re-register this device";
+      } else {
+        statusEl.textContent = "Config saved. Turn on reminders for this device below.";
+        btn.textContent = "Enable reminders on this device";
+      }
+    }
+
+    function showRemindersConfigView() {
+      document.getElementById("reminders-config-view").style.display = "block";
+      document.getElementById("reminders-enable-view").style.display = "none";
+      const input = document.getElementById("reminders-config-input");
+      const vapidInput = document.getElementById("reminders-vapid-input");
+      const config = getFcmConfig();
+      if (input) input.value = config ? JSON.stringify(config, null, 2) : "";
+      if (vapidInput) vapidInput.value = getFcmVapid() || "";
+    }
+
+    function saveRemindersConfig() {
+      const raw = document.getElementById("reminders-config-input").value.trim();
+      const vapid = document.getElementById("reminders-vapid-input").value.trim();
+      if (!raw || !vapid) { showToast("Paste both the config and the VAPID key"); return; }
+      let config;
+      try { config = JSON.parse(raw); } catch (e) { showToast("That config isn't valid JSON", "error"); return; }
+      if (!config.apiKey || !config.projectId || !config.messagingSenderId || !config.appId) {
+        showToast("Config is missing apiKey, projectId, messagingSenderId, or appId", "error");
+        return;
+      }
+      try {
+        localStorage.setItem(FCM_CONFIG_KEY, JSON.stringify(config));
+        localStorage.setItem(FCM_VAPID_KEY, vapid);
+      } catch (e) {}
+      updateRemindersUI();
+      showToast("Reminder config saved on this device");
+    }
+
+    async function enableReminders() {
+      const config = getFcmConfig();
+      const vapidKey = getFcmVapid();
+      const statusEl = document.getElementById("reminders-status");
+      if (!config || !vapidKey) { showToast("Save your config first"); return; }
+      if (!("Notification" in window) || !("serviceWorker" in navigator)) {
+        statusEl.textContent = "This browser doesn't support notifications.";
+        return;
+      }
+      try {
+        const permission = await Notification.requestPermission();
+        if (permission !== "granted") {
+          statusEl.textContent = "Notification permission was denied — enable it in your browser/phone settings to use reminders.";
+          return;
+        }
+        statusEl.textContent = "Registering this device...";
+        const swReg = await navigator.serviceWorker.ready;
+        if (!firebase.apps.length) firebase.initializeApp(config);
+        const messaging = firebase.messaging();
+        const token = await messaging.getToken({ vapidKey, serviceWorkerRegistration: swReg });
+        if (!token) throw new Error("no token returned");
+        const groupId = getBackupId();
+        const db = getSyncDb();
+        if (!groupId || !db) throw new Error("set up Cloud Sync's database URL first");
+        const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+        const base = db.replace(/\/$/, "") + "/trace-push/" + groupId;
+        await fetch(base + "/tz.json", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(tz) });
+        await fetch(base + "/tokens/" + encodeURIComponent(token) + ".json", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ tz, addedAt: Date.now() }),
+        });
+        setReminderToken(token);
+        updateRemindersUI();
+        showToast("Reminders enabled on this device", "success");
+      } catch (e) {
+        const detail = (e && e.message) ? e.message : String(e);
+        statusEl.textContent = "Couldn't enable reminders (" + detail + ").";
+        showToast("Reminder setup failed", "error");
+      }
+    }
+
     let syncPollTimer = null;
     function startSyncPolling() {
       stopSyncPolling();
@@ -1389,13 +1529,32 @@
     function addUpcomingTask() {
       const text = document.getElementById("upcoming-text").value.trim();
       const date = document.getElementById("upcoming-date").value;
+      const notifyTime = document.getElementById("upcoming-time").value || null;
       if (!text || !date) return;
-      state.tasks.push({ id: uid(), text, createdAt: Date.now(), done: false, date, lane: "later" });
+      state.tasks.push({ id: uid(), text, createdAt: Date.now(), done: false, date, lane: "later", notifyTime });
       document.getElementById("upcoming-text").value = "";
       document.getElementById("upcoming-date").value = "";
+      document.getElementById("upcoming-time").value = "";
       saveState();
       render();
-      showToast("Upcoming task added");
+      showToast(notifyTime ? "Upcoming task added — reminder at " + notifyTime : "Upcoming task added");
+    }
+
+    function editTaskNotifyTime(id) {
+      const task = state.tasks.find((t) => t.id === id);
+      if (!task) return;
+      const current = task.notifyTime || "";
+      const input = prompt("Reminder time for \"" + task.text + "\" (24-hour HH:MM, e.g. 14:30). Leave blank to remove the reminder:", current);
+      if (input === null) return;
+      const trimmed = input.trim();
+      if (trimmed && !/^([01]\d|2[0-3]):[0-5]\d$/.test(trimmed)) {
+        showToast("Use 24-hour HH:MM format, e.g. 09:00 or 18:30", "error");
+        return;
+      }
+      task.notifyTime = trimmed || null;
+      saveState();
+      render();
+      showToast(trimmed ? "Reminder set for " + trimmed : "Reminder removed");
     }
 
     function deleteTask(id) {
@@ -1576,10 +1735,11 @@
         html += `<div class="task-card" data-task-id="${t.id}">
           <div style="flex:1;">
             <div class="task-title" style="cursor:text;" onclick="makeEditable(this,(v)=>editTask('${t.id}',v))">${escapeHtml(t.text)}</div>
-            <div class="meta">${t.date}</div>
+            <div class="meta">${t.date}${t.notifyTime ? ' · 🔔 ' + t.notifyTime : ''}</div>
           </div>
           <div class="task-actions">
             <button class="edit-btn" title="Rename" onclick="editTaskPrompt('${t.id}')">✎</button>
+            <button class="icon-btn" title="${t.notifyTime ? 'Change reminder time' : 'Set a reminder time'}" onclick="editTaskNotifyTime('${t.id}')">🔔</button>
             <button class="icon-btn done-btn" onclick="markTaskDone('${t.id}')">✓</button>
             <button class="icon-btn" onclick="deleteTask('${t.id}')">✕</button>
           </div>
@@ -2076,7 +2236,7 @@
       document.getElementById("view-" + name).classList.add("active");
       document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
       document.querySelector('.tab[data-view="' + name + '"]').classList.add("active");
-      if (name === "stats") { renderStats(); updateSyncUI(); renderBackupList(); }
+      if (name === "stats") { renderStats(); updateSyncUI(); renderBackupList(); updateRemindersUI(); }
     }
 
     function render() {
