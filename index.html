@@ -1344,6 +1344,16 @@
       }
     }
 
+    function undoTaskDone(id) {
+      const task = state.tasks.find((t) => t.id === id);
+      if (!task) return;
+      task.done = false;
+      task.doneAt = null;
+      saveState();
+      render();
+      showToast("Marked as not done", "info");
+    }
+
     function formatDuration(hours) {
       if (!hours) return "";
       if (hours < 1) return Math.round(hours * 60) + " min";
@@ -1448,7 +1458,10 @@
         html += '<div class="trace-label" style="margin-bottom:8px;">Completed</div><div class="lane-items">';
         doneTasks.forEach((t) => {
           const durLabel = formatDuration(t.hours);
-          html += '<div class="task-card done" data-task-id="' + t.id + '"><div class="task-title">' + escapeHtml(t.text) + (durLabel ? ' <span class="duration-chip">⏱ ' + durLabel + '</span>' : '') + '</div></div>';
+          html += '<div class="task-card done" data-task-id="' + t.id + '">';
+          html += '<div class="task-title">' + escapeHtml(t.text) + (durLabel ? ' <span class="duration-chip">⏱ ' + durLabel + '</span>' : '') + '</div>';
+          html += '<div class="task-actions"><button class="icon-btn" title="Undo — mark as not done" onclick="undoTaskDone(\'' + t.id + '\')">↺</button></div>';
+          html += '</div>';
         });
         html += '</div>';
       }
