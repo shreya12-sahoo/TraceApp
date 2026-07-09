@@ -1,0 +1,8 @@
+{
+  "name": "trace-check-reminders",
+  "description": "Run once via GitHub Actions cron: sends due task-reminder pushes through Firebase Cloud Messaging",
+  "private": true,
+  "dependencies": {
+    "firebase-admin": "^12.1.0"
+  }
+}
