@@ -314,6 +314,7 @@
 
     /* Toast */
     .toast-container { position: fixed; top: 16px; right: 16px; z-index: 200; display: flex; flex-direction: column; gap: 8px; }
+    #ambient-overlay { position: fixed; inset: 0; z-index: -1; pointer-events: none; background: var(--accent); opacity: calc(var(--session-progress, 0) * 0.05); transition: opacity 1.5s linear; }
     .toast {
       background: var(--bg-card); border: 1px solid var(--border); border-left: 3px solid var(--accent);
       border-radius: var(--radius-sm); padding: 10px 14px; box-shadow: var(--shadow);
@@ -436,6 +437,7 @@
   </style>
 </head>
 <body>
+  <div id="ambient-overlay"></div>
   <div class="app">
     <!-- Header -->
     <header style="margin-bottom: 18px;">
@@ -451,6 +453,8 @@
       <button class="tab" data-view="week" onclick="switchView('week')">Week</button>
       <button class="tab" data-view="upcoming" onclick="switchView('upcoming')">Upcoming</button>
       <button class="tab" data-view="journal" onclick="switchView('journal')">Journal</button>
+      <button class="tab" data-view="roadmap" onclick="switchView('roadmap')">Roadmap</button>
+      <button class="tab" data-view="patterns" onclick="switchView('patterns')">Patterns</button>
       <button class="tab" data-view="stats" onclick="switchView('stats')">Stats</button>
     </nav>
 
@@ -524,6 +528,49 @@
         <button class="btn btn-primary" onclick="addJournalEntry()">Save</button>
       </div>
       <div id="journal-entries" class="journal-entries"></div>
+    </section>
+
+    <!-- Roadmap View -->
+    <section id="view-roadmap" class="view">
+      <div class="section-title" id="roadmap-month-title" style="margin-bottom: 4px;"></div>
+      <div class="section-sub" style="margin-bottom: 10px;">Things to get done sometime this month — separate from your day-by-day tasks. Anything left unchecked just carries into next month.</div>
+      <div class="upcoming-form" style="margin-bottom: 14px;">
+        <input id="roadmap-input" type="text" placeholder="Add something for this month..." onkeydown="if(event.key==='Enter') addRoadmapItem()" />
+        <button class="btn btn-primary" onclick="addRoadmapItem()">Add</button>
+      </div>
+      <div id="roadmap-list" class="upcoming-list"></div>
+    </section>
+
+    <!-- Patterns View -->
+    <section id="view-patterns" class="view">
+      <div id="drift-banner"></div>
+
+      <div class="section-title" style="margin-bottom: 4px;">Priority focus</div>
+      <div class="section-sub" style="margin-bottom: 10px;">Name the category you most want your time to go toward (e.g. "VLSI") to enable the drift check below.</div>
+      <div class="card" style="margin-bottom: 18px;">
+        <div class="modal-actions" style="justify-content: flex-start;">
+          <input id="priority-tag-input" type="text" placeholder="e.g. VLSI" style="padding:8px; border-radius:6px; border:1px solid var(--border); background:var(--bg-input); color:var(--text-primary);" />
+          <button class="btn btn-primary" onclick="savePriorityTag()">Save</button>
+        </div>
+      </div>
+
+      <div class="section-title" style="margin-bottom: 10px;">Today's timeline</div>
+      <div id="patterns-timeline" class="card" style="margin-bottom: 18px;"></div>
+
+      <div class="section-title" style="margin-bottom: 10px;">Today: planned vs. actual</div>
+      <div id="patterns-planned-actual" class="card" style="margin-bottom: 18px;"></div>
+
+      <div class="section-title" style="margin-bottom: 10px;">By lane (last 30 days)</div>
+      <div id="patterns-lanes" class="card" style="margin-bottom: 18px;"></div>
+
+      <div class="section-title" style="margin-bottom: 10px;">By tag (last 30 days)</div>
+      <div id="patterns-tags" class="card" style="margin-bottom: 18px;"></div>
+
+      <div class="section-title" style="margin-bottom: 10px;">Day of week</div>
+      <div id="patterns-weekday" class="card" style="margin-bottom: 18px;"></div>
+
+      <div class="section-title" style="margin-bottom: 10px;">Focus session timing</div>
+      <div id="patterns-session-time" class="card"></div>
     </section>
 
     <!-- Stats View -->
@@ -611,6 +658,15 @@
               <button class="btn btn-primary" id="reminders-enable-btn" onclick="enableReminders()">Enable reminders on this device</button>
               <button class="btn btn-ghost" onclick="showRemindersConfigView()">Change config</button>
             </div>
+            <div style="margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border);">
+              <div class="modal-text" style="margin-bottom: 8px;">Streak protection: if you haven't completed anything today, get a nudge at:</div>
+              <div class="modal-actions" style="justify-content: flex-start;">
+                <input id="streak-notify-time-input" type="time" style="padding:6px; border-radius:6px; border:1px solid var(--border); background:var(--bg-input); color:var(--text-primary);" />
+                <button class="btn btn-ghost" onclick="saveStreakNotifyTime()">Save</button>
+                <button class="btn btn-ghost" onclick="clearStreakNotifyTime()">Turn off</button>
+              </div>
+              <div class="meta" id="streak-notify-status" style="margin-top: 8px;"></div>
+            </div>
           </div>
           <div class="meta" id="reminders-status" style="margin-top: 10px;"></div>
         </div>
@@ -656,8 +712,10 @@
     <div class="modal">
       <div class="modal-title">Focus Timer Setup</div>
       <div class="modal-text" style="margin-bottom: 12px;">Select a task and preset to begin.</div>
-      <div id="timer-task-select" style="margin-bottom: 12px;"></div>
+      <div id="timer-task-select" style="margin-bottom: 8px;"></div>
+      <div id="timer-estimate" class="meta" style="margin-bottom: 12px;"></div>
       <div class="preset-row" style="margin-bottom: 12px; flex-wrap: wrap;">
+        <button class="preset-btn" data-preset="2" onclick="selectPreset(2, this)">2m</button>
         <button class="preset-btn" data-preset="15" onclick="selectPreset(15, this)">15m</button>
         <button class="preset-btn active" data-preset="25" onclick="selectPreset(25, this)">25m</button>
         <button class="preset-btn" data-preset="30" onclick="selectPreset(30, this)">30m</button>
@@ -713,11 +771,14 @@
     <div class="modal" style="text-align: center;">
       <div class="badge-icon" style="font-size: 48px; margin-bottom: 10px;">☕</div>
       <div class="modal-title">Session Complete!</div>
-      <div class="modal-text">Take a short break. Your brain deserves it.</div>
+      <div class="modal-text">Still in it? Keep going — or take a short break, your brain deserves it too.</div>
       <div class="modal-actions" style="justify-content: center;">
-        <button class="btn btn-primary" onclick="startBreak(5)">5 min break</button>
-        <button class="btn btn-primary" onclick="startBreak(10)">10 min break</button>
-        <button class="btn btn-primary" onclick="startBreak(15)">15 min break</button>
+        <button class="btn btn-primary" id="keep-going-btn" onclick="keepGoing()">Keep going</button>
+      </div>
+      <div class="modal-actions" style="justify-content: center; margin-top: 8px;">
+        <button class="btn btn-ghost" onclick="startBreak(5)">5 min break</button>
+        <button class="btn btn-ghost" onclick="startBreak(10)">10 min break</button>
+        <button class="btn btn-ghost" onclick="startBreak(15)">15 min break</button>
         <button class="btn btn-ghost" onclick="closeBreakModal(); skipBreak()">Skip</button>
       </div>
     </div>
@@ -768,11 +829,16 @@
         endTime: null,
         mode: "focus",
         sessionsCompleted: 0,
+        chainCount: 0,
       },
       badges: {},
       theme: "midnight",
       customColors: { primaryHue: 145, secondaryHue: 214, bgWarmth: 20, animSpeed: 50 },
       soundEnabled: true,
+      streakNotifyTime: null,
+      priorityTag: "",
+      sessionLog: [],
+      roadmapItems: [],
     };
 
     let timerInterval = null;
@@ -882,10 +948,15 @@
       }
       if (parsed.timer.endTime === undefined) parsed.timer.endTime = null;
       if (!parsed.timer.mode) parsed.timer.mode = "focus";
+      if (parsed.timer.chainCount === undefined) parsed.timer.chainCount = 0;
       if (!parsed.badges || typeof parsed.badges !== "object" || Array.isArray(parsed.badges)) parsed.badges = {};
       if (!parsed.theme) parsed.theme = "midnight";
       if (!parsed.customColors || typeof parsed.customColors !== "object") parsed.customColors = { primaryHue: 145, secondaryHue: 214, bgWarmth: 20, animSpeed: 50 };
       if (parsed.soundEnabled === undefined) parsed.soundEnabled = true;
+      if (parsed.streakNotifyTime === undefined) parsed.streakNotifyTime = null;
+      if (parsed.priorityTag === undefined) parsed.priorityTag = "";
+      if (!Array.isArray(parsed.sessionLog)) parsed.sessionLog = [];
+      if (!Array.isArray(parsed.roadmapItems)) parsed.roadmapItems = [];
       return parsed;
     }
 
@@ -903,8 +974,10 @@
       applyCustomColors();
       restoreTimerIfAny();
       render();
-      maybeShowDailyRundown();
-      maybeNotifyUpcomingTasks();
+      if (!isFocusSessionActive()) {
+        maybeShowDailyRundown();
+        maybeNotifyUpcomingTasks();
+      }
       updateSyncUI();
       updateRemindersUI();
       if (getSyncId()) { pullSync(false); startSyncPolling(); }
@@ -1280,6 +1353,27 @@
         statusEl.textContent = "Config saved. Turn on reminders for this device below.";
         btn.textContent = "Enable reminders on this device";
       }
+      const streakInput = document.getElementById("streak-notify-time-input");
+      const streakStatus = document.getElementById("streak-notify-status");
+      if (streakInput) streakInput.value = state.streakNotifyTime || "";
+      if (streakStatus) streakStatus.textContent = state.streakNotifyTime ? "On — nudge at " + state.streakNotifyTime : "Off";
+    }
+
+    function saveStreakNotifyTime() {
+      const input = document.getElementById("streak-notify-time-input");
+      const val = input.value.trim();
+      if (!val) { showToast("Pick a time first"); return; }
+      state.streakNotifyTime = val;
+      saveState();
+      updateRemindersUI();
+      showToast("Streak protection on — nudge at " + val);
+    }
+
+    function clearStreakNotifyTime() {
+      state.streakNotifyTime = null;
+      saveState();
+      updateRemindersUI();
+      showToast("Streak protection turned off");
     }
 
     function showRemindersConfigView() {
@@ -1508,6 +1602,10 @@
       if (!text) return;
       const durationSelect = document.getElementById("today-duration");
       const hours = durationSelect ? parseFloat(durationSelect.value) : null;
+      if (hours >= 2) {
+        const proceed = confirm("That's a big block (" + formatDuration(hours) + "). Add it as one task anyway? Cancel to go break it into smaller pieces first.");
+        if (!proceed) { showToast("Add the smaller pieces one at a time instead"); return; }
+      }
       state.tasks.push({ id: uid(), text, hours, createdAt: Date.now(), done: false, date: todayStr(), lane: "later" });
       input.value = "";
       saveState();
@@ -1538,6 +1636,30 @@
       saveState();
       render();
       showToast(notifyTime ? "Upcoming task added — reminder at " + notifyTime : "Upcoming task added");
+    }
+
+    function deferTask(id) {
+      const task = state.tasks.find((t) => t.id === id);
+      if (!task) return;
+      const d = new Date();
+      d.setDate(d.getDate() + 1);
+      task.date = d.toISOString().slice(0, 10);
+      saveState();
+      render();
+      showToast("Moved to tomorrow — no guilt");
+    }
+
+    function editTaskTag(id) {
+      const task = state.tasks.find((t) => t.id === id);
+      if (!task) return;
+      const current = task.tag || "";
+      const input = prompt("Tag for \"" + task.text + "\" (e.g. VLSI, Study, Personal). Leave blank to remove:", current);
+      if (input === null) return;
+      const trimmed = input.trim();
+      task.tag = trimmed || null;
+      saveState();
+      render();
+      showToast(trimmed ? "Tagged " + trimmed : "Tag removed");
     }
 
     function editTaskNotifyTime(id) {
@@ -1590,6 +1712,30 @@
     }
 
     /* ---------- RENDER: TODAY ---------- */
+    const STALLED_DAYS = 2;
+    const dismissedStalledIds = new Set();
+
+    function isStalled(t) {
+      return !t.done && Date.now() - t.createdAt > STALLED_DAYS * 86400000 && !dismissedStalledIds.has(t.id);
+    }
+
+    function splitStalledTask(id) {
+      const task = state.tasks.find((t) => t.id === id);
+      if (!task) return;
+      const step = prompt('Smallest possible first step for "' + task.text + '":');
+      if (!step || !step.trim()) return;
+      state.tasks.push({ id: uid(), text: step.trim(), hours: null, createdAt: Date.now(), done: false, date: todayStr(), lane: task.lane });
+      dismissedStalledIds.add(id);
+      saveState();
+      render();
+      showToast("Added a smaller first step");
+    }
+
+    function dismissStalledSuggestion(id) {
+      dismissedStalledIds.add(id);
+      render();
+    }
+
     function renderToday() {
       const list = document.getElementById("today-list");
       const today = todayStr();
@@ -1605,12 +1751,22 @@
         html += '<div style="flex:1; display:flex; align-items:center; min-width:0;">';
         html += '<div class="task-title" style="cursor:text; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" onclick="makeEditable(this, (v)=>editTask(\'' + t.id + '\',v))">' + escapeHtml(t.text) + '</div>';
         if (durLabel) html += '<span class="duration-chip">⏱ ' + durLabel + '</span>';
+        html += '<span class="duration-chip" style="cursor:pointer;" title="Change tag" onclick="editTaskTag(\'' + t.id + '\')">' + (t.tag ? '🏷 ' + escapeHtml(t.tag) : '+ tag') + '</span>';
         html += '</div>';
         html += '<div class="task-actions">';
+        html += '<button class="icon-btn" title="Start a focus session on this now" onclick="quickStartTimer(\'' + t.id + '\')">▶</button>';
         html += '<button class="edit-btn" title="Rename" onclick="editTaskPrompt(\'' + t.id + '\')">✎</button>';
         html += '<button class="icon-btn done-btn" title="Done — earn it" onclick="markTaskDone(\'' + t.id + '\')">✓</button>';
+        html += '<button class="icon-btn" title="Not today — move to tomorrow" onclick="deferTask(\'' + t.id + '\')">⏭</button>';
         html += '<button class="icon-btn" title="Delete" onclick="deleteTask(\'' + t.id + '\')">✕</button>';
         html += '</div></div>';
+        if (isStalled(t)) {
+          html += '<div class="meta" style="margin: -6px 0 8px 4px; display:flex; align-items:center; gap:8px;">'
+            + 'Been sitting a few days — split it? '
+            + '<button class="btn btn-ghost" style="padding:2px 8px; font-size:10px;" onclick="splitStalledTask(\'' + t.id + '\')">Add smaller step</button>'
+            + '<button class="icon-btn" style="font-size:10px;" title="Dismiss" onclick="dismissStalledSuggestion(\'' + t.id + '\')">✕</button>'
+            + '</div>';
+        }
       });
       html += '</div>';
       if (doneTasks.length) {
@@ -1735,7 +1891,7 @@
         html += `<div class="task-card" data-task-id="${t.id}">
           <div style="flex:1;">
             <div class="task-title" style="cursor:text;" onclick="makeEditable(this,(v)=>editTask('${t.id}',v))">${escapeHtml(t.text)}</div>
-            <div class="meta">${t.date}${t.notifyTime ? ' · 🔔 ' + t.notifyTime : ''}</div>
+            <div class="meta">${t.date}${t.notifyTime ? ' · 🔔 ' + t.notifyTime : ''} · <span style="cursor:pointer;" title="Change tag" onclick="editTaskTag('${t.id}')">${t.tag ? '🏷 ' + escapeHtml(t.tag) : '+ tag'}</span></div>
           </div>
           <div class="task-actions">
             <button class="edit-btn" title="Rename" onclick="editTaskPrompt('${t.id}')">✎</button>
@@ -1802,6 +1958,247 @@
       container.innerHTML = html;
     }
 
+    /* ---------- ROADMAP (monthly, separate from daily tasks) ---------- */
+    function currentMonthKey() {
+      return todayStr().slice(0, 7); // "YYYY-MM"
+    }
+
+    function monthLabel(key) {
+      const [y, m] = key.split("-").map(Number);
+      return new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString(undefined, { month: "long", year: "numeric", timeZone: "UTC" });
+    }
+
+    function addRoadmapItem() {
+      const input = document.getElementById("roadmap-input");
+      const text = input.value.trim();
+      if (!text) return;
+      state.roadmapItems.push({ id: uid(), text, done: false, createdAt: Date.now(), doneAt: null });
+      input.value = "";
+      saveState();
+      renderRoadmap();
+      showToast("Added to this month's roadmap");
+    }
+
+    function toggleRoadmapItem(id) {
+      const item = state.roadmapItems.find((r) => r.id === id);
+      if (!item) return;
+      item.done = !item.done;
+      item.doneAt = item.done ? Date.now() : null;
+      saveState();
+      renderRoadmap();
+    }
+
+    function deleteRoadmapItem(id) {
+      state.roadmapItems = state.roadmapItems.filter((r) => r.id !== id);
+      saveState();
+      renderRoadmap();
+    }
+
+    function renderRoadmap() {
+      const monthKey = currentMonthKey();
+      document.getElementById("roadmap-month-title").textContent = monthLabel(monthKey) + " Roadmap";
+      // Carries forward automatically: unfinished items always show; done items only show
+      // for the month they were completed in, so old finished items don't pile up.
+      const visible = state.roadmapItems.filter((r) => !r.done || (r.doneAt && dateToStr(r.doneAt).slice(0, 7) === monthKey));
+      const list = document.getElementById("roadmap-list");
+      if (!visible.length) {
+        list.innerHTML = '<div class="empty-state">Nothing on this month\'s roadmap yet</div>';
+        return;
+      }
+      const sorted = visible.slice().sort((a, b) => (a.done === b.done ? b.createdAt - a.createdAt : a.done ? 1 : -1));
+      let html = "";
+      sorted.forEach((r) => {
+        html += `<div class="task-card${r.done ? " done" : ""}" data-item-id="${r.id}">
+          <div class="task-title" style="cursor:pointer;" onclick="toggleRoadmapItem('${r.id}')">${r.done ? "☑" : "☐"} ${escapeHtml(r.text)}</div>
+          <div class="task-actions"><button class="icon-btn" title="Delete" onclick="deleteRoadmapItem('${r.id}')">✕</button></div>
+        </div>`;
+      });
+      list.innerHTML = html;
+    }
+
+    /* ---------- RENDER: PATTERNS ---------- */
+    const PATTERNS_WINDOW_DAYS = 30;
+    const DRIFT_WINDOW_DAYS = 7;
+    const DRIFT_MIN_TASKS = 3;
+    const DRIFT_THRESHOLD_PCT = 15;
+
+    function daysAgoStr(n) {
+      const d = new Date();
+      d.setDate(d.getDate() - n);
+      return d.toISOString().slice(0, 10);
+    }
+
+    function localDateStrOf(ts) {
+      const d = new Date(ts);
+      return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+    }
+
+    function renderTimeline() {
+      const el = document.getElementById("patterns-timeline");
+      const todayLocal = localDateStrOf(Date.now());
+      const sessions = (state.sessionLog || []).filter((s) => s.startedAt && localDateStrOf(s.startedAt) === todayLocal);
+      if (!sessions.length) { el.innerHTML = '<div class="empty-state">No focus sessions yet today</div>'; return; }
+      let bars = "";
+      sessions.forEach((s) => {
+        const d = new Date(s.startedAt);
+        const startPct = ((d.getHours() + d.getMinutes() / 60) / 24) * 100;
+        const widthPct = Math.max((s.durationMin / 60 / 24) * 100, 1);
+        const label = formatDuration(s.durationMin / 60) + " at " + d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        bars += '<div title="' + label + '" style="position:absolute; left:' + startPct + '%; width:' + widthPct + '%; top:0; bottom:0; background:var(--accent); border-radius:3px;"></div>';
+      });
+      el.innerHTML = '<div style="position:relative; height:24px; background:var(--bg-input); border-radius:4px; overflow:hidden;">' + bars + '</div>'
+        + '<div class="meta" style="margin-top:6px; display:flex; justify-content:space-between;"><span>12am</span><span>6am</span><span>12pm</span><span>6pm</span><span>12am</span></div>';
+    }
+
+    function renderPatterns() {
+      document.getElementById("priority-tag-input").value = state.priorityTag || "";
+      renderTimeline();
+      renderPlannedVsActual();
+      renderLanePatterns();
+      renderTagPatterns();
+      renderWeekdayPatterns();
+      renderSessionTimePatterns();
+      renderDriftBanner();
+    }
+
+    function savePriorityTag() {
+      const val = document.getElementById("priority-tag-input").value.trim();
+      state.priorityTag = val || "";
+      saveState();
+      renderPatterns();
+      showToast(val ? "Priority focus set to " + val : "Priority focus cleared");
+    }
+
+    function renderPlannedVsActual() {
+      const el = document.getElementById("patterns-planned-actual");
+      const today = todayStr();
+      const planned = state.tasks.filter((t) => t.date === today);
+      const done = planned.filter((t) => t.done);
+      const open = planned.filter((t) => !t.done);
+      if (!planned.length) {
+        el.innerHTML = '<div class="empty-state">Nothing planned for today yet</div>';
+        return;
+      }
+      let html = '<div class="modal-text" style="margin-bottom:10px;">' + done.length + ' of ' + planned.length + ' planned tasks done today.</div>';
+      if (open.length) {
+        html += '<div class="meta" style="margin-bottom:6px;">Still open:</div>';
+        html += '<ul style="margin:0; padding-left:18px;">' + open.map((t) => '<li>' + escapeHtml(t.text) + '</li>').join("") + '</ul>';
+      } else {
+        html += '<div class="meta">Everything planned for today is done.</div>';
+      }
+      el.innerHTML = html;
+    }
+
+    function ratesByKey(tasks, keyFn) {
+      const buckets = {};
+      tasks.forEach((t) => {
+        const key = keyFn(t);
+        if (key === null || key === undefined) return;
+        if (!buckets[key]) buckets[key] = { total: 0, done: 0 };
+        buckets[key].total++;
+        if (t.done) buckets[key].done++;
+      });
+      return buckets;
+    }
+
+    function renderRateList(elId, buckets, emptyMsg) {
+      const el = document.getElementById(elId);
+      const keys = Object.keys(buckets);
+      if (!keys.length) { el.innerHTML = '<div class="empty-state">' + emptyMsg + '</div>'; return; }
+      let html = "";
+      keys.forEach((key) => {
+        const b = buckets[key];
+        const pct = b.total ? Math.round((b.done / b.total) * 100) : 0;
+        html += '<div style="margin-bottom:8px;">'
+          + '<div class="modal-text" style="margin-bottom:3px;">' + escapeHtml(key) + ' — ' + pct + '% (' + b.done + '/' + b.total + ')</div>'
+          + '<div style="height:6px; border-radius:3px; background:var(--bg-input); overflow:hidden;"><div style="height:100%; width:' + pct + '%; background:var(--accent);"></div></div>'
+          + '</div>';
+      });
+      el.innerHTML = html;
+    }
+
+    function renderLanePatterns() {
+      const cutoff = daysAgoStr(PATTERNS_WINDOW_DAYS);
+      const recent = state.tasks.filter((t) => t.date >= cutoff);
+      const buckets = ratesByKey(recent, (t) => {
+        const lane = LANES.find((l) => l.key === t.lane);
+        return lane ? lane.label : null;
+      });
+      renderRateList("patterns-lanes", buckets, "Not enough recent tasks yet");
+    }
+
+    function renderTagPatterns() {
+      const cutoff = daysAgoStr(PATTERNS_WINDOW_DAYS);
+      const recent = state.tasks.filter((t) => t.date >= cutoff && t.tag);
+      const buckets = ratesByKey(recent, (t) => t.tag);
+      renderRateList("patterns-tags", buckets, 'No tagged tasks in the last ' + PATTERNS_WINDOW_DAYS + ' days yet — tap "+ tag" on a task to start.');
+    }
+
+    function renderWeekdayPatterns() {
+      const el = document.getElementById("patterns-weekday");
+      const doneTasks = state.tasks.filter((t) => t.done && t.doneAt);
+      if (!doneTasks.length) { el.innerHTML = '<div class="empty-state">Complete a few tasks to see this</div>'; return; }
+      const names = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+      const counts = [0, 0, 0, 0, 0, 0, 0];
+      doneTasks.forEach((t) => { counts[new Date(t.doneAt).getUTCDay()]++; });
+      const max = Math.max(...counts);
+      let html = "";
+      names.forEach((name, i) => {
+        const pct = max ? Math.round((counts[i] / max) * 100) : 0;
+        html += '<div style="margin-bottom:8px;">'
+          + '<div class="modal-text" style="margin-bottom:3px;">' + name + ' — ' + counts[i] + '</div>'
+          + '<div style="height:6px; border-radius:3px; background:var(--bg-input); overflow:hidden;"><div style="height:100%; width:' + pct + '%; background:var(--accent);"></div></div>'
+          + '</div>';
+      });
+      el.innerHTML = html;
+    }
+
+    function renderSessionTimePatterns() {
+      const el = document.getElementById("patterns-session-time");
+      const log = state.sessionLog || [];
+      if (!log.length) { el.innerHTML = '<div class="empty-state">Complete a focus session to see this</div>'; return; }
+      const buckets = { "Night (12–6am)": 0, "Morning (6–12pm)": 0, "Afternoon (12–6pm)": 0, "Evening (6pm–12am)": 0 };
+      const labels = Object.keys(buckets);
+      log.forEach((s) => {
+        if (!s.startedAt) return;
+        const hour = new Date(s.startedAt).getHours();
+        if (hour < 6) buckets[labels[0]]++;
+        else if (hour < 12) buckets[labels[1]]++;
+        else if (hour < 18) buckets[labels[2]]++;
+        else buckets[labels[3]]++;
+      });
+      const top = labels.reduce((a, b) => (buckets[a] >= buckets[b] ? a : b));
+      let html = '<div class="modal-text" style="margin-bottom:10px;">Most focus sessions happen in the ' + top.split(" (")[0].toLowerCase() + '.</div>';
+      labels.forEach((label) => {
+        html += '<div class="meta">' + label + ': ' + buckets[label] + '</div>';
+      });
+      el.innerHTML = html;
+    }
+
+    function renderDriftBanner() {
+      const banner = document.getElementById("drift-banner");
+      if (!state.priorityTag) { banner.innerHTML = ""; return; }
+      const now = Date.now();
+      const recentStart = now - DRIFT_WINDOW_DAYS * 86400000;
+      const priorStart = now - 2 * DRIFT_WINDOW_DAYS * 86400000;
+      const doneTasks = state.tasks.filter((t) => t.done && t.doneAt);
+      const recent = doneTasks.filter((t) => t.doneAt >= recentStart);
+      const prior = doneTasks.filter((t) => t.doneAt >= priorStart && t.doneAt < recentStart);
+      if (recent.length < DRIFT_MIN_TASKS || prior.length < DRIFT_MIN_TASKS) { banner.innerHTML = ""; return; }
+      const shareOf = (list) => list.filter((t) => t.tag === state.priorityTag).length / list.length;
+      const recentShare = shareOf(recent);
+      const priorShare = shareOf(prior);
+      const dropPct = Math.round((priorShare - recentShare) * 100);
+      if (priorShare > 0 && dropPct >= DRIFT_THRESHOLD_PCT) {
+        banner.innerHTML = '<div class="card" style="margin-bottom:18px; border-left:3px solid var(--accent);">'
+          + '<div class="modal-text">Your time on <strong>' + escapeHtml(state.priorityTag) + '</strong> has dropped over the last ' + DRIFT_WINDOW_DAYS + ' days ('
+          + Math.round(priorShare * 100) + '% → ' + Math.round(recentShare * 100) + '% of completed tasks) compared to the ' + DRIFT_WINDOW_DAYS + ' days before that — worth a look?</div>'
+          + '</div>';
+      } else {
+        banner.innerHTML = "";
+      }
+    }
+
     /* ---------- RENDER: STATS ---------- */
     function renderStats() {
       const grid = document.getElementById("stats-grid");
@@ -1851,14 +2248,29 @@
     }
 
     /* ---------- TRAY ---------- */
+    const TRAY_STAGE_SIZE = 2;
+    let trayExpanded = false;
+
+    function toggleTrayExpanded() {
+      trayExpanded = !trayExpanded;
+      renderTray();
+    }
+
     function renderTray() {
       const tray = document.getElementById("tray-unsorted");
-      const unsorted = state.tasks.filter((t) => !t.date || t.lane === "later").slice(0, 20);
-      if (unsorted.length === 0) { tray.innerHTML = '<div class="empty-state" style="font-size:10px;">Empty</div>'; return; }
+      const all = state.tasks.filter((t) => !t.date || t.lane === "later").slice(0, 20);
+      if (all.length === 0) { tray.innerHTML = '<div class="empty-state" style="font-size:10px;">Empty</div>'; trayExpanded = false; return; }
+      const shown = trayExpanded ? all : all.slice(0, TRAY_STAGE_SIZE);
       let html = "";
-      unsorted.forEach((t) => {
+      shown.forEach((t) => {
         html += `<div class="tray-item" onclick="moveTask('${t.id}', 'now'); toggleTray();">${escapeHtml(t.text)}</div>`;
       });
+      const hidden = all.length - shown.length;
+      if (hidden > 0) {
+        html += `<div class="tray-item" style="text-align:center; cursor:pointer;" onclick="toggleTrayExpanded()">+${hidden} more — show all</div>`;
+      } else if (trayExpanded && all.length > TRAY_STAGE_SIZE) {
+        html += `<div class="tray-item" style="text-align:center; cursor:pointer;" onclick="toggleTrayExpanded()">Show fewer</div>`;
+      }
       tray.innerHTML = html;
     }
 
@@ -1879,6 +2291,9 @@
     }
 
     /* ---------- TIMER ---------- */
+    function isFocusSessionActive() {
+      return !!(state.timer && state.timer.running && state.timer.mode === "focus");
+    }
     function tickLiveClock() {
       const el = document.getElementById("live-clock");
       if (el) el.textContent = "now " + new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -1916,12 +2331,21 @@
       if (!state.timer.running || !state.timer.endTime) return;
       const remaining = Math.round((state.timer.endTime - Date.now()) / 1000);
       state.timer.secondsLeft = Math.max(0, remaining);
+      if (state.timer.mode === "focus" && state.timer.preset) {
+        const total = state.timer.preset * 60;
+        const progress = total > 0 ? Math.min(1, Math.max(0, 1 - state.timer.secondsLeft / total)) : 0;
+        document.documentElement.style.setProperty("--session-progress", progress.toFixed(3));
+      }
       if (remaining <= 0) {
         finishTimer();
       } else {
         persistTimer();
         updateTimerUI();
       }
+    }
+
+    function resetAmbientProgress() {
+      document.documentElement.style.setProperty("--session-progress", "0");
     }
 
     function startTimer() {
@@ -1937,12 +2361,23 @@
       ensureNotificationPermission();
     }
 
+    function quickStartTimer(id) {
+      if (state.timer.running) { showToast("A session is already running"); return; }
+      ensureAudioContext();
+      state.timer.taskId = id;
+      state.timer.mode = "focus";
+      state.timer.secondsLeft = state.timer.preset * 60;
+      state.timer.chainCount = 0;
+      startTimer();
+    }
+
     function toggleTimer() {
       ensureAudioContext();
       if (state.timer.running) { pauseTimer(); } else { startTimer(); }
     }
 
     function pauseTimer() {
+      resetAmbientProgress();
       if (state.timer.endTime) {
         state.timer.secondsLeft = Math.max(0, Math.round((state.timer.endTime - Date.now()) / 1000));
       }
@@ -1966,7 +2401,10 @@
       closeBreakModal();
       clearInterval(timerInterval);
       state.timer.mode = "break";
+      state.timer.preBreakTaskId = state.timer.taskId;
+      state.timer.preBreakPreset = state.timer.preset;
       state.timer.taskId = null;
+      state.timer.chainCount = 0;
       state.timer.preset = minutes;
       state.timer.secondsLeft = minutes * 60;
       state.timer.running = true;
@@ -1980,29 +2418,65 @@
     }
 
     function finishTimer() {
+      resetAmbientProgress();
       const wasBreak = state.timer.mode === "break";
       state.timer.running = false;
       state.timer.endTime = null;
       clearInterval(timerInterval);
-      if (!wasBreak) state.timer.sessionsCompleted = (state.timer.sessionsCompleted || 0) + 1;
+      if (!wasBreak) {
+        state.timer.sessionsCompleted = (state.timer.sessionsCompleted || 0) + 1;
+        const loggedTask = state.tasks.find((t) => t.id === state.timer.taskId);
+        state.sessionLog.push({
+          id: uid(),
+          taskId: state.timer.taskId,
+          tag: (loggedTask && loggedTask.tag) || null,
+          startedAt: state.timer.startedAt,
+          endedAt: Date.now(),
+          durationMin: state.timer.preset,
+          hyperfocus: (state.timer.chainCount || 0) >= 1,
+        });
+      }
       state.timer.secondsLeft = 0;
       persistTimer();
       updateTimerUI();
       flashTabTitle(false);
       sessionEndAlarm(wasBreak);
       if (wasBreak) {
-        showToast("Break's over.", "success");
         state.timer.mode = "focus";
+        state.timer.taskId = state.timer.preBreakTaskId || null;
+        state.timer.preset = state.timer.preBreakPreset || state.timer.preset;
         state.timer.secondsLeft = state.timer.preset * 60;
+        state.timer.preBreakTaskId = null;
+        state.timer.preBreakPreset = null;
+        const resumedTask = state.tasks.find((t) => t.id === state.timer.taskId);
+        showToast(resumedTask ? "Break's over — ready to continue \"" + resumedTask.text + "\"" : "Break's over.", "success");
         updateTimerUI();
         persistTimer();
       } else {
+        const keepGoingBtn = document.getElementById("keep-going-btn");
+        if (keepGoingBtn) keepGoingBtn.textContent = "Keep going (+" + state.timer.preset + " min)";
         document.getElementById("break-modal").classList.add("open");
         showToast("Focus session complete!", "success");
         checkBadges();
         const rect = document.getElementById("bar-clock").getBoundingClientRect();
         createConfetti(rect.left + rect.width / 2, rect.top + rect.height / 2, 36);
       }
+    }
+
+    function keepGoing() {
+      ensureAudioContext();
+      closeBreakModal();
+      clearInterval(timerInterval);
+      state.timer.mode = "focus";
+      state.timer.secondsLeft = state.timer.preset * 60;
+      state.timer.running = true;
+      state.timer.startedAt = Date.now();
+      state.timer.endTime = Date.now() + state.timer.preset * 60 * 1000;
+      state.timer.chainCount = (state.timer.chainCount || 0) + 1;
+      persistTimer();
+      timerInterval = setInterval(tick, 1000);
+      updateTimerUI();
+      showToast("Keeping going — another " + state.timer.preset + " min");
     }
 
     function skipBreak() {
@@ -2128,12 +2602,29 @@
     function openTimerModal() {
       const select = document.getElementById("timer-task-select");
       const openTasks = state.tasks.filter((t) => !t.done).slice(0, 10);
-      let html = '<select id="modal-task-select" style="width:100%; padding:8px; border-radius:6px; border:1px solid var(--border); background:var(--bg-input); color:var(--text-primary);">';
+      let html = '<select id="modal-task-select" onchange="updateTimerEstimate()" style="width:100%; padding:8px; border-radius:6px; border:1px solid var(--border); background:var(--bg-input); color:var(--text-primary);">';
       html += '<option value="">— Select a task —</option>';
       openTasks.forEach((t) => { html += `<option value="${t.id}">${escapeHtml(t.text)}</option>`; });
       html += "</select>";
       select.innerHTML = html;
+      document.getElementById("timer-estimate").textContent = "";
       document.getElementById("timer-modal").classList.add("open");
+    }
+
+    function estimateForTag(tag) {
+      if (!tag) return null;
+      const matches = (state.sessionLog || []).filter((s) => s.tag === tag);
+      if (!matches.length) return null;
+      const avg = matches.reduce((sum, s) => sum + (s.durationMin || 0), 0) / matches.length;
+      return Math.round(avg);
+    }
+
+    function updateTimerEstimate() {
+      const sel = document.getElementById("modal-task-select");
+      const el = document.getElementById("timer-estimate");
+      const task = sel && sel.value ? state.tasks.find((t) => t.id === sel.value) : null;
+      const estimate = task ? estimateForTag(task.tag) : null;
+      el.textContent = estimate ? "This usually takes you ~" + estimate + " min" : "";
     }
 
     function closeTimerModal() {
@@ -2156,6 +2647,7 @@
       state.timer.taskId = id;
       state.timer.secondsLeft = state.timer.preset * 60;
       state.timer.running = false;
+      state.timer.chainCount = 0;
       closeTimerModal();
       startTimer();
     }
@@ -2237,6 +2729,8 @@
       document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
       document.querySelector('.tab[data-view="' + name + '"]').classList.add("active");
       if (name === "stats") { renderStats(); updateSyncUI(); renderBackupList(); updateRemindersUI(); }
+      if (name === "patterns") { renderPatterns(); }
+      if (name === "roadmap") { renderRoadmap(); }
     }
 
     function render() {

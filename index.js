@@ -40,6 +40,50 @@ function zonedTimeToUtcMs(y, m, d, hh, mm, timeZone) {
   return utcGuess - (localAsUtc - utcGuess);
 }
 
+// Trace's client dates tasks with `new Date().toISOString().slice(0,10)` (UTC calendar
+// day) — mirrored here so "today"/streaks agree with what the app itself shows.
+function utcDateStr(date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function computeDoneDatesUTC(tasks) {
+  const set = new Set();
+  tasks.forEach((t) => {
+    if (t && t.done && t.doneAt) set.add(utcDateStr(new Date(t.doneAt)));
+  });
+  return set;
+}
+
+// Length of the consecutive-day run ending exactly at `dateStr` (inclusive), 0 if absent.
+function streakEndingAt(doneDatesSet, dateStr) {
+  if (!doneDatesSet.has(dateStr)) return 0;
+  let streak = 1;
+  let cursor = new Date(dateStr + "T00:00:00Z");
+  for (;;) {
+    cursor = new Date(cursor.getTime() - 86400000);
+    if (doneDatesSet.has(utcDateStr(cursor))) streak++; else break;
+  }
+  return streak;
+}
+
+// Sends a push to every token in the group, prunes any FCM reports as dead, returns
+// how many sends succeeded.
+async function sendToGroup(db, groupId, tokenKeys, tokens, title, body, tag) {
+  const response = await admin.messaging().sendEachForMulticast({
+    tokens,
+    data: { title, body, taskId: tag },
+  });
+  const updates = {};
+  response.responses.forEach((r, i) => {
+    const code = r.error && r.error.code;
+    if (!r.success && (code === "messaging/invalid-registration-token" || code === "messaging/registration-token-not-registered")) {
+      updates["trace-push/" + groupId + "/tokens/" + tokenKeys[i]] = null;
+    }
+  });
+  if (Object.keys(updates).length) await db.ref().update(updates);
+  return response.successCount;
+}
+
 async function main() {
   const db = admin.database();
   const [syncSnap, pushSnap] = await Promise.all([
@@ -49,6 +93,8 @@ async function main() {
   const syncData = syncSnap.val() || {};
   const pushData = pushSnap.val() || {};
   const now = new Date();
+  const todayUTC = utcDateStr(now);
+  const yesterdayUTC = utcDateStr(new Date(now.getTime() - 86400000));
   let sent = 0;
 
   for (const groupId of Object.keys(syncData)) {
@@ -65,8 +111,14 @@ async function main() {
     const tokens = tokenKeys.map((key) => decodeURIComponent(key));
     if (!tokens.length) continue;
 
+    // Do-not-disturb: an active focus session suppresses pushes for this group.
+    // Not marked "notified" here, so it's retried (or aged out) on the next run.
+    const timer = group.timer;
+    if (timer && timer.running && timer.mode === "focus") continue;
+
     const nowLocal = localDateTimeString(now, tz);
 
+    // --- Per-task reminders ---
     for (const task of tasks) {
       if (!task || task.done || !task.date || !task.notifyTime || !task.id) continue;
       if (notified[task.id]) continue;
@@ -82,21 +134,25 @@ async function main() {
         continue;
       }
 
-      const response = await admin.messaging().sendEachForMulticast({
-        tokens,
-        data: { title: "Trace", body: task.text, taskId: task.id },
-      });
+      sent += await sendToGroup(db, groupId, tokenKeys, tokens, "Trace", task.text, task.id);
       await db.ref("trace-push/" + groupId + "/notified/" + task.id).set(true);
-      sent += response.successCount;
+    }
 
-      const updates = {};
-      response.responses.forEach((r, i) => {
-        const code = r.error && r.error.code;
-        if (!r.success && (code === "messaging/invalid-registration-token" || code === "messaging/registration-token-not-registered")) {
-          updates["trace-push/" + groupId + "/tokens/" + tokenKeys[i]] = null;
+    // --- Streak protection ---
+    const streakNotifyTime = group.streakNotifyTime;
+    if (streakNotifyTime && pushGroup.streakNotifiedDate !== todayUTC) {
+      const doneDates = computeDoneDatesUTC(tasks);
+      if (!doneDates.has(todayUTC)) {
+        const atRiskStreak = streakEndingAt(doneDates, yesterdayUTC);
+        const localTimePart = nowLocal.split("T")[1];
+        if (atRiskStreak >= 1 && localTimePart >= streakNotifyTime) {
+          const body = atRiskStreak === 1
+            ? "Your streak ends tonight if you don't complete something today."
+            : `Your ${atRiskStreak}-day streak ends tonight if you don't complete something today.`;
+          sent += await sendToGroup(db, groupId, tokenKeys, tokens, "Trace", body, "streak-" + todayUTC);
+          await db.ref("trace-push/" + groupId + "/streakNotifiedDate").set(todayUTC);
         }
-      });
-      if (Object.keys(updates).length) await db.ref().update(updates);
+      }
     }
   }
 
